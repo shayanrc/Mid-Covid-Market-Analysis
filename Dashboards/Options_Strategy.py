@@ -18,6 +18,7 @@ st.set_page_config(
    initial_sidebar_state="expanded",
 )
 DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)),'datastore/processed')
+DATA_ROOT = 'QmXuhP4cHJfcuHpK6PdPwbzUHQo66W5vNNjHDfqTuTWhnR'
 
 def load_ohlcv_files(csv_folder):
     csv_files = glob.glob(csv_folder+'/*.csv',)
@@ -102,7 +103,7 @@ def evaluate_postions(options_data, underlying_period_delta, underlying_price, c
     # capital_breakeven = (capital*(1+expected_rate)+tax)/lot_size
     capital_breakeven = ((1+expected_rate)*capital/lot_size)
 
-    # Change percent required to break even on the full capital
+    # Maximum Change required to break even on position
     ce_df['change_breakeven'] = ((ce_df['Strike Price'] + ce_df['Close'] - underlying_price)/underlying_price).values
     pe_df['change_breakeven'] = ((pe_df['Strike Price'] - pe_df['Close'] - underlying_price)/underlying_price).values
 
@@ -266,26 +267,47 @@ def load_options_data(underlying):
     expiries = resp_json['records']['expiryDates']
     return option_df, expiries
 
+PROVIDER_URL = 'https://ipfs.infura.io/ipfs/'
+
+def load_underlying(underlying, data_root=DATA_ROOT):
+    
+    data_dict = requests.get(PROVIDER_URL+data_root).json()
+    data_hash = data_dict[underlying]
+
+     
+    underlying_df = pd.read_json(PROVIDER_URL+data_hash)
+        
+    underlying_df.loc[:, 'Date'] = pd.to_datetime(underlying_df['Date'])
+    underlying_df = underlying_df.set_index('Date')
+
+    return underlying_df
+    
 
 st.title('Options Strategy Probability Optimization')
 
 instruments  = os.listdir(DATA_PATH)
 instruments = [x for x in instruments if not x.startswith('.')]
-underlying = st.sidebar.selectbox('Underlying', instruments)
+
+sidebar_form = st.sidebar.form(key='sidebar_form')
+underlying = sidebar_form.selectbox('Underlying', instruments)
 
 st.header('%s' % underlying)
 #Load Underlying Data
-underlying_path = os.path.join(DATA_PATH, underlying)
+# underlying_path = os.path.join(DATA_PATH, underlying)
 # ohlc_path = os.path.join(underlying_path, 'OHLC')
-ohlc_path = os.path.join(underlying_path, underlying+'.csv')
+# ohlc_path = os.path.join(underlying_path, underlying+'.csv')
 # underlying_df = load_ohlcv_files(ohlc_path)
-underlying_df = pd.read_csv(ohlc_path, parse_dates=['Date'], index_col=['Date'])
-
+# underlying_df = pd.read_csv(ohlc_path, parse_dates=['Date'], index_col=['Date'])
+# underlying_df = pd.read_json('https://bafybeieoritg3qozjxewiamkin2ded7vri6j55w33kpljfvhciul5njsku.ipfs.infura-ipfs.io/')
+underlying_df = load_underlying(underlying)
+underlying_df
 with st.expander('Historical data details') as underlying_upload_expander:
     st.write('Earliest Historical data available:')
     st.write(underlying_df.index.min())
     st.write('Latest Historical data available:')
     st.write(underlying_df.index.max())
+
+    underlying_df.head()
 
 
 # Upload underlying Data
@@ -310,7 +332,6 @@ today = dt.date.today()
 # And keep only future expiris
 # expiries = [expiry for expiry in expiries if expiry>today]
 
-st.sidebar.button("Reload Options Data")
 
 option_df, expiries = load_options_data(underlying)
 # if len(expiries)==0:
@@ -319,7 +340,7 @@ option_df, expiries = load_options_data(underlying)
 last_close = option_df['Underlying'].values[0]
 last_close = st.number_input('Last Close', min_value=round_to_base(last_close*0.9, base=100), max_value=round_to_base(last_close*1.1, base=100), value=int(last_close), step=100)
 
-expiry = st.sidebar.selectbox('Choose Expiry', expiries)
+expiry = sidebar_form.selectbox('Choose Expiry', expiries)
 # calc_trade_days_left = trade_days_left[expiries.index(expiry)]
 
 # calc_trade_days_left = 5
@@ -337,13 +358,13 @@ fig = plt.figure(figsize=(32,28))
 ax = fig.add_subplot(311)
 ax.plot(underlying_df.Close)
 ax.grid()
-ax.set_title('NIFTY Daily Close')
+ax.set_title('%s Daily Close'% underlying)
 # fig = plt.figure(figsize=(23,5))
 ax = fig.add_subplot(312)
 ax.set_ylim(bottom=-0.1, top=0.1)
 # ax.bar(data_df.index, (data_df.Open - data_df.Close)/data_df.Open)
 ax.bar(underlying_period_delta.index, underlying_period_delta['delta'])
-ax.set_title('NIFTY Period Change')
+ax.set_title('%s Period Change' % underlying)
 ax.grid()
 ax = fig.add_subplot(313)
 
@@ -440,7 +461,7 @@ with st.container() as cntnr:
 
 st.header('Options Analysis')
 
-options_path = os.path.join(underlying_path, 'Options')
+# options_path = os.path.join(underlying_path, 'Options')
 
 # options_path = os.path.join(underlying_path, 'Options')
 # options_df = load_ohlcv_files(options_path)
@@ -494,11 +515,12 @@ with st.expander('Preview %s Options Data'% underlying) as  ohlc_preview:
     st.dataframe(option_df.head(5))
     st.dataframe(option_df.tail(5))
 
-capital = st.sidebar.number_input('Capital', min_value=1000, max_value=50000, value=15000, step=500)
-lot_size = st.sidebar.number_input('Lot Size', min_value=1, max_value=10000, value=50, step=10)
-expected_rate = st.sidebar.slider('Minimumum Expected Returns (%)', min_value=0.5, max_value=25.0, value=2.0, step=0.5)/100
+capital = sidebar_form.number_input('Capital', min_value=1000, max_value=50000, value=15000, step=500)
+lot_size = sidebar_form.number_input('Lot Size', min_value=1, max_value=10000, value=50, step=10)
+expected_rate = sidebar_form.slider('Minimumum Expected Returns (%)', min_value=0.5, max_value=25.0, value=2.0, step=0.5)/100
 
 
+sidebar_form.form_submit_button("Scan Opportunities")
 
 # with st.expander('Add Existing Position Pairs'):
 #     with st.form('existing_positions_form'):
@@ -535,6 +557,12 @@ if 'current_positions' in st.session_state:
 
 ce_df, pe_df = evaluate_postions(options_data=option_df, underlying_period_delta=underlying_period_delta, underlying_price=last_close, capital=capital, expected_rate=expected_rate, lot_size=lot_size)
 
+period_volatility = (underlying_period_delta['delta_max'] - underlying_period_delta['delta_min']).iloc[-1]
+prev_period_volatility = (underlying_period_delta['delta_max'] - underlying_period_delta['delta_min']).iloc[-2]
+ce_df = ce_df[ce_df['change_breakeven']<period_volatility]
+pe_df = pe_df[pe_df['change_breakeven'].abs()<period_volatility]
+
+
 with st.expander('Put Positions Analysis'):
     st.table(pe_df[['Strike Price', 'Close', 'probability_breakeven', 'probability_itm']].sort_values('probability_breakeven', ascending=False, ignore_index=True))
 
@@ -542,13 +570,26 @@ with st.expander('Call Positions Analysis'):
     st.table(ce_df[['Strike Price', 'Close', 'probability_breakeven', 'probability_itm']].sort_values('probability_breakeven', ascending=False, ignore_index=True))
 
 
+
 position_pairs = generate_pairs(pe_df, ce_df)
 eval_pairs = evaluate_pairs(position_pairs, last_close, underlying_period_delta, lot_size=lot_size, expected_rate=expected_rate)
-period_volatility = (underlying_period_delta['delta_max'] - underlying_period_delta['delta_min']).iloc[-1]
 
 
-st.write(period_volatility)
+
+# "Volatility %s %" % period_volatility
+# st.text("Trend %f %"% (underlying_period_delta['delta'].iloc[-1]))
+col1, col2 = st.columns(2)
+
+col1.metric(label="Volatility", 
+            value="{:.2f} %".format(100*period_volatility), 
+            delta="{:.2f} %".format(100*(period_volatility-prev_period_volatility)))
+
+col2.metric(label="Trend", 
+            value="{:.2f} %".format(100*underlying_period_delta['delta'].iloc[-1]), 
+            delta="{:.2f} %".format(100*underlying_period_delta['delta'].iloc[-1]-underlying_period_delta['delta'].iloc[-2]))
 st.header('Recomended Pairs')
 # max(eval_pairs['ce_strike_price']-last_close, last_close-eval_pairs['pe_strike_price'])
-
-st.dataframe(eval_pairs[(period_volatility*last_close)>(eval_pairs['target']+eval_pairs['spread']/2)][['cost', 'pe_strike_price', 'ce_strike_price', 'pe_price', 'ce_price', 'target', 'pair_otm_probability', 'pair_not_breakeven_probability', 'spread']])
+dsp_cols = ['cost', 'pe_strike_price', 'ce_strike_price', 'pe_price', 'ce_price', 'target', 'pair_otm_probability', 'pair_not_breakeven_probability', 'spread']
+# last_close - eval_pairs['pe_strike_price'], eval_pairs['ce_strike_price'] - last_close
+# dsp_pairs = eval_pairs[(period_volatility*last_close)>(eval_pairs['target']+eval_pairs['spread'])]
+st.dataframe(eval_pairs[dsp_cols])

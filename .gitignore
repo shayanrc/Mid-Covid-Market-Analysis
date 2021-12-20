@@ -3,4 +3,5 @@ Dashboards/.ipynb_checkpoints/*
 Data/*
 *.pyc
 Dashboards/*.pyc
-datastore/*
+datastore/*/*
+.gcloud/*

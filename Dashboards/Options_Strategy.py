@@ -299,7 +299,16 @@ def load_underlying(underlying, data_root=DATA_ROOT):
         underlying_df = underlying_df.set_index('Date')
 
     return underlying_df
-    
+
+@st.cache(ttl=3600*24*7, persist=True)
+def get_lotsize(underlying, is_index=True):
+    if is_index:
+        inst_type = 'FUTIDX'
+    else:
+        inst_type = 'FUTSTK'
+    contract_quote = nsepy.get_quote(symbol=underlying, series='EQ', instrument=inst_type, expiry=dt.date(2021,12,30))
+    market_lot = contract_quote['data'][0]['marketLot']    
+    return market_lot
 
 st.title('Options Strategy Probability Optimization')
 
@@ -608,7 +617,8 @@ with st.expander('Preview %s Options Data'% underlying) as  ohlc_preview:
     st.dataframe(option_df.tail(5))
 
 capital = sidebar_form.number_input('Capital', min_value=1000, max_value=50000, value=15000, step=500)
-lot_size = sidebar_form.number_input('Lot Size', min_value=1, max_value=10000, value=50, step=10)
+market_lot = get_lotsize(underlying, is_index)
+lot_size = sidebar_form.number_input('Lot Size', min_value=1, max_value=10000, value=int(market_lot), step=int(market_lot))
 expected_rate = sidebar_form.slider('Slippage (%)', min_value=0.5, max_value=25.0, value=2.0, step=0.5)/100
 
 

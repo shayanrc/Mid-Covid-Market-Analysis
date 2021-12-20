@@ -1,1 +1,6 @@
 .ipynb_checkpoints/*
+Dashboards/.ipynb_checkpoints/*
+Data/*
+*.pyc
+Dashboards/*.pyc
+datastore/*/*.csv

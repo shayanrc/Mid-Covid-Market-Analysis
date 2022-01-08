@@ -9,6 +9,7 @@ import glob
 import os
 
 import datetime as dt
+from dateutil import relativedelta
 import nsepy
 
 import requests
@@ -300,13 +301,17 @@ def load_underlying(underlying, data_root=DATA_ROOT):
 
     return underlying_df
 
-@st.cache(ttl=3600*24*7, persist=True)
+# @st.cache(ttl=3600*24*7, persist=True)
 def get_lotsize(underlying, is_index=True):
     if is_index:
         inst_type = 'FUTIDX'
     else:
         inst_type = 'FUTSTK'
-    contract_quote = nsepy.get_quote(symbol=underlying, series='EQ', instrument=inst_type, expiry=dt.date(2021,12,30))
+    
+    expiry = dt.date.today()+relativedelta.relativedelta(day=31, weekday=relativedelta.TH(-1))
+    print(expiry)
+    contract_quote = nsepy.get_quote(symbol=underlying, series='EQ', instrument=inst_type, expiry=expiry)
+    print(contract_quote)
     market_lot = contract_quote['data'][0]['marketLot']    
     return market_lot
 
@@ -399,47 +404,6 @@ trade_days_left = sidebar_form.slider('Adjust Trade Days Left to Expiry', 1, 32,
 underlying_period_delta = calculate_period_delta(underlying_df, trade_days_left)
 
 
-# fig = plt.figure(figsize=(32,28))
-# ax = fig.add_subplot(311)
-# ax.plot(underlying_df.Close)
-# ax.grid()
-# ax.set_title('%s Daily Close'% underlying)
-# # fig = plt.figure(figsize=(23,5))
-# ax = fig.add_subplot(312)
-# ax.set_ylim(bottom=-0.1, top=0.1)
-# # ax.bar(data_df.index, (data_df.Open - data_df.Close)/data_df.Open)
-# ax.bar(underlying_period_delta.index, underlying_period_delta['delta'])
-# ax.set_title('%s Period Change' % underlying)
-# ax.grid()
-# ax = fig.add_subplot(313)
-
-# ax.set_ylim(bottom=0, top=0.1)
-# # ax.plot(data_df.Close.rolling(trade_days_left).apply(lambda x: (x[-1]-x.mean())/x.std()))
-# # ax.grid()
-# # ax.set_title('Stationarized')
-# ax.bar(underlying_period_delta.index, 
-#        (underlying_period_delta['delta_max']-underlying_period_delta['delta_min']), label="Volatility")#-abs(underlying_period_delta['delta']))
-
-# ax.bar(underlying_period_delta.index, 
-#        abs(underlying_period_delta['delta']), label="Trend")#-abs(underlying_period_delta['delta']))
-
-# # ax.plot(abs(underlying_period_delta['delta'].rolling(5).mean()), '.',color='green')
-# # ax.plot(abs(underlying_period_delta['delta'].rolling(3).mean()), color='lightgreen')
-# ax.grid()
-# ax.set_title('Volatility')
-# ax.legend()
-
-# st.pyplot(fig)
-
-# df = pd.read_csv('https://raw.githubusercontent.com/plotly/datasets/master/finance-charts-apple.csv')
-
-# fig = px.line(underlying_df.reset_index(), x='Date', y='Close', title=underlying)
-
-# fig.update_xaxes(rangeslider_visible=True)
-# fig.update_layout(
-#     margin=dict(l=10, r=0, t=25, b=0),
-#     # paper_bgcolor="LightSteelBlue",
-# )
 fig = make_subplots(rows=3, cols=1, 
                     shared_xaxes=True, 
                     vertical_spacing=0.1, 
@@ -533,7 +497,7 @@ with st.container() as cntnr:
         expected_high = expected_changes[1]/100
         expected_low = expected_changes[0]/100
     else:
-        expected_changes = st.slider('Price Range', min_value=round_to_base(last_close*0.9), max_value=round_to_base(last_close*1.1, base=50), value=(round_to_base(last_close*1.015),round_to_base(last_close*0.985)), step=50)
+        expected_changes = st.slider('Price Range', min_value=round_to_base(last_close*0.9, base=10), max_value=round_to_base(last_close*1.1, base=10), value=(round_to_base(last_close*1.015, 1),round_to_base(last_close*0.985, 1)), step=10)
         
         expected_high = (expected_changes[1]-last_close)/last_close
         expected_low = (expected_changes[0]-last_close)/last_close
@@ -616,7 +580,7 @@ with st.expander('Preview %s Options Data'% underlying) as  ohlc_preview:
     st.dataframe(option_df.head(5))
     st.dataframe(option_df.tail(5))
 
-capital = sidebar_form.number_input('Capital', min_value=1000, max_value=50000, value=15000, step=500)
+capital = sidebar_form.number_input('Capital', min_value=1000, max_value=100000, value=15000, step=500)
 market_lot = get_lotsize(underlying, is_index)
 lot_size = sidebar_form.number_input('Lot Size', min_value=1, max_value=10000, value=int(market_lot), step=int(market_lot))
 expected_rate = sidebar_form.slider('Slippage (%)', min_value=0.5, max_value=25.0, value=2.0, step=0.5)/100
@@ -654,17 +618,27 @@ sidebar_form.form_submit_button("Scan Opportunities")
 
 
 ce_df, pe_df = evaluate_postions(options_data=option_df, underlying_period_delta=underlying_period_delta, underlying_price=last_close, capital=capital, expected_rate=expected_rate, lot_size=lot_size)
-
+if len(ce_df)==0 or len(pe_df)==0:
+    st.warning('No Viable pairs were found within capital range')
+    st.stop()
 period_volatility = (underlying_period_delta['delta_max'] - underlying_period_delta['delta_min']).iloc[-1]
 prev_period_volatility = (underlying_period_delta['delta_max'] - underlying_period_delta['delta_min']).iloc[-2]
+volatailty_decay = prev_period_volatility-period_volatility
 col1, col2 = st.columns(2)
 filter_volatility = col1.checkbox('Filter Volatility', value=True)
 filter_sigma = col2.checkbox('Filter Sigma', value=True)
 
 if filter_volatility:
-    ce_df = ce_df[ce_df['change_breakeven']<period_volatility]
-    pe_df = pe_df[pe_df['change_breakeven'].abs()<period_volatility]
-
+    if volatailty_decay>0:
+            
+        ce_df = ce_df[ce_df['change_breakeven']<(period_volatility-volatailty_decay)]
+        pe_df = pe_df[pe_df['change_breakeven'].abs()<period_volatility-volatailty_decay]
+    else:    
+        ce_df = ce_df[ce_df['change_breakeven']<period_volatility]
+        pe_df = pe_df[pe_df['change_breakeven'].abs()<period_volatility]
+if len(ce_df)==0 or len(pe_df)==0:
+    st.warning('No Viable pairs were found within volitility range')
+    st.stop()
 
 with st.expander('Put Positions Analysis'):
     st.table(pe_df[['Strike Price', 'Close', 'probability_breakeven', 'probability_itm']].sort_values('probability_breakeven', ascending=False, ignore_index=True))
@@ -674,6 +648,9 @@ with st.expander('Call Positions Analysis'):
 
 
 position_pairs = generate_pairs(pe_df, ce_df, fitler_sigma=filter_sigma)
+if len(position_pairs) == 0:
+    st.warning('No Viable pairs were found which would breakeven at less than 1 sigma change')
+    st.stop()
 eval_pairs = evaluate_pairs(position_pairs, last_close, underlying_period_delta, lot_size=lot_size, expected_rate=expected_rate)
 
 
@@ -708,7 +685,7 @@ def highlight_pairs(x):
 # dsp_pairs = dsp_pairs[period_volatility>abs(dsp_pairs['pe_breakeven_change']/last_close)]
 dsp_pairs = eval_pairs[dsp_cols]
 
-fig = px.scatter(dsp_pairs, x='pair_otm_probability', y='pair_not_breakeven_probability', size='spread', color='cost', hover_data=['ce_strike_price', 'pe_strike_price'])
+fig = px.scatter(dsp_pairs, x='pair_otm_probability', y='pair_not_breakeven_probability', size='spread', color='cost', hover_data=['ce_strike_price', 'pe_strike_price', 'ce_price', 'pe_price', 'target'])
 x_min = dsp_pairs['pair_otm_probability'].min()
 y_min = dsp_pairs['pair_not_breakeven_probability'].min()
 # fig.add_annotation(

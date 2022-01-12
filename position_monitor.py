@@ -36,10 +36,14 @@ def on_tick(update):
     print(f'{token} update: {last_trade_time} : {symbol} : {ltp} - {ltq}')
         
         
-            
+def on_order(order):
+    print('ORDER UPDATE')
+    print(order)
 
 
-
+def on_market_status_message(msg):
+    print('MARKET MSG')
+    print(msg)
     
 
 def evaluate_positions_by_expiry(positions, target_gains_percent = 10):
@@ -143,11 +147,11 @@ def main():
     
     alice.start_websocket(subscribe_callback=on_tick,
                           socket_open_callback=on_open_callback,
-                          order_update_callback=None,
+                          order_update_callback=on_order,
                           socket_close_callback=None, 
                           socket_error_callback=None, 
                           run_in_background=True, 
-                          market_status_messages_callback=None, 
+                          market_status_messages_callback=on_market_status_message, 
                           exchange_messages_callback=None, 
                           oi_callback=None, 
                           dpr_callback=None)
@@ -173,7 +177,9 @@ def main():
         print(pos_by_ex)
 
         sell_candidates = pos_by_ex[pos_by_ex['position_price']>=pos_by_ex['target']]
-        if len(sell_candidates)>0:
+        
+        if len(sell_candidates)>0 or len(expiry_last_high)>0:
+            print(expiry_last_high)
             for ix, row in pos_by_ex.iterrows():
                 pos_name = f"{row['underlying']} - {row['expiry']}"
 
@@ -189,7 +195,7 @@ def main():
                         # update new high
                         expiry_last_high[pos_name] = row['position_price']
                     # if it has dropped by the callback rate since last high
-                    elif row['position_price'] < expiry_last_high[pos_name](1-trailing_stop_callback_rate):
+                    elif row['position_price'] < expiry_last_high[pos_name]*(1-trailing_stop_callback_rate):
                         # send a sell notification
                         pb.push_note(f"SELL {pos_name}", 
                                      f"Position Price : Rs. {row['position_price']}\n Last high: Rs. {expiry_last_high[pos_name]} ")

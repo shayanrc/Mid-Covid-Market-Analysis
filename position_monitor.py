@@ -20,7 +20,6 @@ def on_open_callback():
 
 
 def on_tick(update):
-    # print(f"Update {update}")
 
     global positions_ltp
     
@@ -45,6 +44,8 @@ def on_market_status_message(msg):
     print('MARKET MSG')
     print(msg)
     
+def close_position():
+    pass
 
 def evaluate_positions_by_expiry(positions, target_gains_percent = 10):
     target_rate = 1+(target_gains_percent/100)
@@ -67,31 +68,9 @@ def evaluate_positions_by_expiry(positions, target_gains_percent = 10):
 
     return positions_by_expiry
 
-def main():
-    global positions_ltp
-    config_toml = toml.load('.gcloud/config.toml')
-    alice_blue_cred = config_toml['aliceblue']
-    pb_token = config_toml['pushbullet']['access_token']
-    
-    pb = PushBullet(pb_token)
-
-
-    print('requesting aliceblue token')
-    access_token = AliceBlue.login_and_get_access_token(username=alice_blue_cred['username'], 
-                                                        password=alice_blue_cred['password'], 
-                                                        twoFA=alice_blue_cred['twoFA'], 
-                                                        api_secret=alice_blue_cred['api_secret'], 
-                                                        app_id=alice_blue_cred['app_id'])
-    print(f'recieved access token {access_token}')
-    alice = AliceBlue(username=alice_blue_cred['username'], 
-                    password=alice_blue_cred['password'], 
-                    access_token=access_token, 
-                    master_contracts_to_download=['NSE', 'NFO'])
-
-    indices = ['NIFTY', 'BANKNIFTY']
-
+def fetch_positions(alice_client):
     # Retrieve all positions from broker
-    positions_resp = alice.get_netwise_positions()
+    positions_resp = alice_client.get_netwise_positions()
     if positions_resp['status']=='success':
         # positions = positions_resp['data']['positions']
         positions_df = pd.DataFrame(positions_resp['data']['positions'])[['trading_symbol', 'net_quantity', 'exchange', 'net_amount', 'ltp', 'average_buy_price', 'strike_price', 'instrument_token','unrealised_pnl']].copy()
@@ -124,13 +103,92 @@ def main():
     instruments = []
 
     for ix, position in positions_df.iterrows():
-        instrument = alice.get_instrument_by_token(position['exchange'], position['instrument_token'])
+        instrument = alice_client.get_instrument_by_token(position['exchange'], position['instrument_token'])
         instruments.append(instrument)
         # print(instrument)
         sym_list = instrument.symbol.split()
         positions_df.loc[ix, 'underlying'] = sym_list[0]
         positions_df.loc[ix, 'strike_price'] = sym_list[3]
         positions_df.loc[ix, 'option_type'] = sym_list[4]
+        positions_df.loc[ix, 'symbol'] = instrument.symbol
+        positions_df.loc[ix, 'lot_size'] = instrument.lot_size
+        positions_df.loc[ix, 'expiry'] = instrument.expiry
+
+    positions_df['cost'] = -positions_df['net_amount']
+
+    positions_df = positions_df.rename({'net_quantity':'qty',
+                                        'average_buy_price':'avg_price',
+                                        'ltp':'last_price'}, 
+                                        axis=1)
+    
+    positions_df['value'] = positions_df['last_price']*positions_df['qty']
+    positions_df.lot_size = positions_df.lot_size.astype(int)
+
+    return positions_df
+
+def main():
+    global positions_ltp
+    config_toml = toml.load('.gcloud/config.toml')
+    alice_blue_cred = config_toml['aliceblue']
+    pb_token = config_toml['pushbullet']['access_token']
+    
+    pb = PushBullet(pb_token)
+
+
+    print('requesting aliceblue token')
+    access_token = AliceBlue.login_and_get_access_token(username=alice_blue_cred['username'], 
+                                                        password=alice_blue_cred['password'], 
+                                                        twoFA=alice_blue_cred['twoFA'], 
+                                                        api_secret=alice_blue_cred['api_secret'], 
+                                                        app_id=alice_blue_cred['app_id'])
+    print(f'recieved access token {access_token}')
+    alice = AliceBlue(username=alice_blue_cred['username'], 
+                    password=alice_blue_cred['password'], 
+                    access_token=access_token, 
+                    master_contracts_to_download=['NSE', 'NFO'])
+
+    indices = ['NIFTY', 'BANKNIFTY']
+
+    positions_resp = alice.get_netwise_positions()
+    if positions_resp['status']=='success':
+        # positions = positions_resp['data']['positions']
+        positions_df = pd.DataFrame(positions_resp['data']['positions'])[['trading_symbol', 'net_quantity', 'exchange', 'net_amount', 'ltp', 'average_buy_price', 'strike_price', 'instrument_token','unrealised_pnl']].copy()
+        
+        filter_exchange = filter(lambda x: x['exchange']=='NFO', positions_resp['data']['positions'])
+
+        # make a globally accesible dict to store
+        positions_ltp = dict(map(lambda x: (x['instrument_token'],x['ltp']), # token and price kv pairs
+                            filter_exchange) # after filtering out on exchange
+                        )
+    else:
+        positions_df = None
+    
+    
+    print(positions_ltp)
+    # Filter relevant columns
+    # positions_df = positions[['trading_symbol', 'net_quantity', 'exchange', 'net_amount', 'ltp', 'average_buy_price', 'strike_price', 'instrument_token','unrealised_pnl']].copy()
+    positions_df = positions_df[(positions_df['exchange']=='NFO') & (positions_df['net_quantity']>0)]
+    positions_df.average_buy_price = positions_df.average_buy_price.astype(float)
+    positions_df.net_quantity = positions_df.net_quantity.astype(int)
+
+    positions_df['breakeven'] = (positions_df.average_buy_price*positions_df.net_quantity).sum()/positions_df.net_quantity
+    positions_df['underlying'] = ''
+    positions_df['strike_price'] = 0.0
+    positions_df['option_type'] = ''
+    positions_df['symbol'] = ''
+    positions_df['lot_size'] = 0
+    positions_df['expiry'] = None
+    positions_df['last_update'] = dt.datetime.now()
+    instruments = []
+
+    for ix, position in positions_df.iterrows():
+        instrument = alice.get_instrument_by_token(position['exchange'], position['instrument_token'])
+        instruments.append(instrument)
+        # print(instrument)
+        sym_list = instrument.symbol.split()
+        positions_df.loc[ix, 'underlying'] = sym_list[0]
+        positions_df.loc[ix, 'strike_price'] = sym_list[-2]
+        positions_df.loc[ix, 'option_type'] = sym_list[-1]
         positions_df.loc[ix, 'symbol'] = instrument.symbol
         positions_df.loc[ix, 'lot_size'] = instrument.lot_size
         positions_df.loc[ix, 'expiry'] = instrument.expiry

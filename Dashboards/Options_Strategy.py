@@ -309,6 +309,10 @@ def get_lotsize(underlying, is_index=True):
         inst_type = 'FUTSTK'
     
     expiry = dt.date.today()+relativedelta.relativedelta(day=31, weekday=relativedelta.TH(-1))
+    
+    if expiry<dt.date.today():
+        expiry = (dt.date.today()+dt.timedelta(days=7))+relativedelta.relativedelta(day=31, weekday=relativedelta.TH(-1))
+    
     print(expiry)
     contract_quote = nsepy.get_quote(symbol=underlying, series='EQ', instrument=inst_type, expiry=expiry)
     print(contract_quote)
